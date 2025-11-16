@@ -5,18 +5,13 @@
   vars:
     ccd_dir: /etc/openvpn/server/edev/ccd
 
-  vars_prompt:
-    - name: "username"
-      prompt: "Enter the file name"
-      private: no
-
   tasks:
-    - name: check if the file is exist
+    - name: check if the file exists
       ansible.builtin.stat:
-        path: "{{ccd_dir}}/{{username}}-BLOCK"
+        path: "{{ ccd_dir }}/{{ username }}-BLOCK"
       register: vpn_file
 
     - name: Rename the file only if it exists
-      ansible.builtin.command: 
+      ansible.builtin.command:
         cmd: mv "{{ ccd_dir }}/{{ username }}-BLOCK" "{{ ccd_dir }}/{{ username }}"
       when: vpn_file.stat.exists
