@@ -16,7 +16,7 @@
     backup_dir: "/tmp/portal_rollback_{{ ansible_date_time.epoch }}"
     remote_zip_path: "/tmp/{{ app_name }}.zip"
     # Path to portal.zip inside your local repository on the Semaphore agent
-    portal_zip_local_path: "portal.zip"
+    portal_zip_local_path: "{{ playbook_dir }}/portal.zip"
 
   tasks:
 
