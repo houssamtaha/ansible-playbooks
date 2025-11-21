@@ -27,6 +27,7 @@
       stat:
         path: "{{ portal_zip_local_path }}"
       register: zip_stat
+      delegate_to: localhost
 
 
     - name: Fail if ZIP not found
