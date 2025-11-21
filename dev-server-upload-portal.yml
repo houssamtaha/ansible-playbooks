@@ -1,0 +1,145 @@
+---
+- name: Upload Portal from Semaphore local repository to Grafana with automatic rollback
+  hosts: grafana
+  become: true
+
+  vars_prompt:
+    - name: app_name
+      prompt: "Enter the application name (used for path and docker-compose)"
+      private: no
+
+  vars:
+    # Path on the target host
+    root_dir: "/opt/edev-apps/{{ app_name }}"
+    deploy_dir: "{{ root_dir }}/portal"
+    docker_compose_file: "{{ root_dir }}/docker-compose.yml"
+    backup_dir: "/tmp/portal_rollback_{{ ansible_date_time.epoch }}"
+    remote_zip_path: "/tmp/{{ app_name }}.zip"
+    # Path to portal.zip inside your local repository on the Semaphore agent
+    portal_zip_local_path: "portal.zip"
+
+  tasks:
+
+    # -------------------------
+    # VALIDATE ZIP ON LOCAL AGENT
+    # -------------------------
+    - name: Check ZIP exists in local repository
+      stat:
+        path: "{{ portal_zip_local_path }}"
+      register: zip_stat
+      delegate_to: localhost
+
+    - name: Fail if ZIP not found
+      fail:
+        msg: "❌ ZIP file not found in local repository: {{ portal_zip_local_path }}"
+      when: not zip_stat.stat.exists
+
+    - name: Fail if not a ZIP file
+      fail:
+        msg: "❌ Provided file is not a .zip archive"
+      when: portal_zip_local_path is not match(".*\\.zip$")
+
+    # =========================
+    # MAIN DEPLOY BLOCK
+    # =========================
+    - block:
+
+        # ----------------------
+        # Backup existing portal
+        # ----------------------
+        - name: Backup existing portal directory if exists
+          command: mv "{{ deploy_dir }}" "{{ backup_dir }}"
+          args:
+            removes: "{{ deploy_dir }}"
+          ignore_errors: true
+
+        # ----------------------
+        # Remove old ZIP on target if exists
+        # ----------------------
+        - name: Remove old ZIP if exists on target
+          file:
+            path: "{{ remote_zip_path }}"
+            state: absent
+
+        # ----------------------
+        # Copy ZIP from Semaphore agent to target host
+        # ----------------------
+        - name: Upload portal.zip to grafana
+          copy:
+            src: "{{ portal_zip_local_path }}"
+            dest: "{{ remote_zip_path }}"
+            mode: "0644"
+
+        # ----------------------
+        # Extract ZIP
+        # ----------------------
+        - name: Extract portal.zip
+          unarchive:
+            src: "{{ remote_zip_path }}"
+            dest: "{{ root_dir }}"
+            remote_src: yes
+
+        # ----------------------
+        # Validate extracted portal
+        # ----------------------
+        - name: Check if extracted portal folder exists
+          stat:
+            path: "{{ deploy_dir }}"
+          register: portal_folder_stat
+
+        - name: Check if portal folder is empty
+          find:
+            paths: "{{ deploy_dir }}"
+            file_type: any
+          register: portal_contents
+          when: portal_folder_stat.stat.exists
+
+        - name: Fail if portal folder missing or empty
+          fail:
+            msg: "❌ Extracted portal folder is missing or empty — triggering rollback."
+          when: not portal_folder_stat.stat.exists or portal_contents.matched == 0
+
+        # ----------------------
+        # Restart docker compose
+        # ----------------------
+        - name: Restart docker compose
+          shell: |
+            docker compose -f {{ docker_compose_file }} down
+            docker compose -f {{ docker_compose_file }} up -d
+          args:
+            executable: /bin/bash
+          when: docker_compose_file is file
+
+      rescue:
+
+        # ----------------------
+        # Rollback tasks
+        # ----------------------
+        - name: Rollback - Remove failed deployment
+          file:
+            path: "{{ deploy_dir }}"
+            state: absent
+          ignore_errors: true
+
+        - name: Rollback - Restore backup if it exists
+          command: mv "{{ backup_dir }}" "{{ deploy_dir }}"
+          ignore_errors: true
+          when: backup_dir is defined
+
+        - name: Rollback - Restart docker compose if file exists
+          shell: |
+            docker compose -f {{ docker_compose_file }} down
+            docker compose -f {{ docker_compose_file }} up -d
+          args:
+            executable: /bin/bash
+          ignore_errors: true
+          when: docker_compose_file is file
+
+        - name: Rollback message
+          debug:
+            msg: "⚠ Deployment failed — rollback completed."
+
+      always:
+        - name: Show backup location
+          debug:
+            msg: "Backup stored at: {{ backup_dir }}"
